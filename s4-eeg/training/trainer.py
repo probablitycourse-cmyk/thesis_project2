@@ -71,7 +71,12 @@ def train(model, train_loader, test_loader, cfg, device, majority: float = 0.0):
 
     groups = model.param_groups(cfg.LR, ssm_mult=cfg.LR_SSM_MULT, theta_mult=cfg.LR_THETA_MULT)
     optimizer = torch.optim.Adam(groups, weight_decay=cfg.WEIGHT_DECAY)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.NUM_EPOCHS)
+    use_sched = getattr(cfg, "USE_SCHEDULER", True)
+    scheduler = (
+        torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.NUM_EPOCHS)
+        if use_sched else None
+    )
+    print(f"lr schedule: {'cosine annealing' if use_sched else f'constant ({cfg.LR:.1e})'}")
     criterion = nn.CrossEntropyLoss()
 
     hist = History()
@@ -107,7 +112,8 @@ def train(model, train_loader, test_loader, cfg, device, majority: float = 0.0):
                 pbar.set_postfix(loss=f"{loss_sum / n:.4f}", acc=f"{correct / n:.4f}")
 
         cur_lr = optimizer.param_groups[0]["lr"]
-        scheduler.step()
+        if scheduler is not None:
+            scheduler.step()
 
         train_loss, train_acc = loss_sum / n, correct / n
         test_loss, test_acc = evaluate(model, test_loader, criterion, device)
