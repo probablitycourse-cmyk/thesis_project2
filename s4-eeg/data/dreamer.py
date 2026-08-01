@@ -209,3 +209,60 @@ def make_loaders(cfg) -> tuple[DataLoader, DataLoader, dict]:
     print(f"  majority baseline on test = {majority:.4f}")
 
     return train_loader, test_loader, info
+
+
+# ----------------------------------------------------------------------
+def make_loaders_per_subject(cfg):
+    """
+    Subject-dependent protocol: yield one (train_loader, test_loader, info)
+    pair per subject, where each subject's own windows are split 80/20.
+
+    A separate model is meant to be trained for every subject and the
+    resulting accuracies averaged -- this is the protocol most published
+    DREAMER results use.
+
+    Yields
+    ------
+    (subject_id, train_loader, test_loader, info)
+    """
+    print("--- building dataset (subject-dependent protocol) ---")
+    X, y, subject = build_arrays(cfg)
+    subjects = np.unique(subject)
+    rng = np.random.RandomState(cfg.SEED)
+
+    print(f"  {len(subjects)} subjects, splitting each {1 - cfg.TEST_RATIO:.0%}/"
+          f"{cfg.TEST_RATIO:.0%} independently")
+
+    for subj in subjects:
+        mask = np.where(subject == subj)[0]
+        perm = rng.permutation(len(mask))
+        n_test = int(len(mask) * cfg.TEST_RATIO)
+        te_local, tr_local = perm[:n_test], perm[n_test:]
+        te_idx, tr_idx = mask[te_local], mask[tr_local]
+
+        Xtr = torch.from_numpy(X[tr_idx]); ytr = torch.from_numpy(y[tr_idx])
+        Xte = torch.from_numpy(X[te_idx]); yte = torch.from_numpy(y[te_idx])
+
+        train_loader = DataLoader(
+            TensorDataset(Xtr, ytr), batch_size=cfg.BATCH_SIZE, shuffle=True,
+            num_workers=cfg.NUM_WORKERS, pin_memory=torch.cuda.is_available(),
+            drop_last=len(tr_idx) > cfg.BATCH_SIZE,
+        )
+        test_loader = DataLoader(
+            TensorDataset(Xte, yte), batch_size=cfg.BATCH_SIZE * 2, shuffle=False,
+            num_workers=cfg.NUM_WORKERS, pin_memory=torch.cuda.is_available(),
+        )
+
+        y_te = y[te_idx]
+        majority = float(max((y_te == c).mean() for c in np.unique(y_te))) if len(y_te) else 0.0
+
+        info = {
+            "subject": int(subj),
+            "n_train": len(tr_idx),
+            "n_test": len(te_idx),
+            "n_channels": X.shape[2],
+            "window_len": X.shape[1],
+            "n_classes": int(y.max()) + 1,
+            "majority_baseline": majority,
+        }
+        yield int(subj), train_loader, test_loader, info
