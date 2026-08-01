@@ -43,6 +43,7 @@ class CFG:
     BATCH_SIZE      = 256
     NUM_EPOCHS      = 80
     LR              = 1e-3
+    USE_SCHEDULER   = False            # False -> constant lr; True -> cosine annealing
     LR_SSM_MULT     = 0.1              # multiplier for log_dt
     LR_THETA_MULT   = 0.1              # multiplier for the Theta generator G
     WEIGHT_DECAY    = 0.0
@@ -64,6 +65,7 @@ class CFG:
         if cls.MODEL.lower() == "s4":
             parts.append(cls.THETA_MODE)
         parts += [cls.TARGET, f"H{cls.H}", f"N{cls.N}", f"L{cls.NUM_LAYERS}", cls.SPLIT_MODE]
+        parts.append("cos" if cls.USE_SCHEDULER else "fixedlr")
         return "_".join(parts)
 
     @classmethod
