@@ -26,6 +26,7 @@ import torch
 import torch.nn as nn
 
 from .hippo import nplr_decompose
+from .ssm_state import SSMState
 
 THETA_MODES = ("none", "const", "order")
 
@@ -41,6 +42,7 @@ class S4Layer(nn.Module):
         dt_min: float = 1e-3,
         dt_max: float = 1e-1,
         theta_init_scale: float = 0.01,
+        train_ssm_state: bool = False,
     ) -> None:
         super().__init__()
         if theta_mode not in THETA_MODES:
@@ -48,9 +50,9 @@ class S4Layer(nn.Module):
 
         self.H, self.N, self.theta_mode = H, N, theta_mode
 
-        Lambda, q, _ = nplr_decompose(N)
-        self.register_buffer("Lambda_buf", torch.tensor(Lambda, dtype=torch.complex64))
-        self.register_buffer("q", torch.tensor(q, dtype=torch.complex64))
+        # Lambda and q come from HiPPO; trainable when train_ssm_state=True
+        # (this is what the official S4 does -- HiPPO is only an initialisation)
+        self.state = SSMState(N, trainable=train_ssm_state)
 
         # readout C, stored as real (H, N, 2) for optimiser compatibility
         self.C_param = nn.Parameter(torch.randn(H, N, 2) / np.sqrt(N))
@@ -99,8 +101,8 @@ class S4Layer(nn.Module):
 
         dt_ = dt[:, None, None]
         z_ = omega[None, :, None]
-        lam_ = self.Lambda_buf[None, None, :]
-        q_ = self.q[None, None, :]
+        lam_ = self.state.Lambda[None, None, :]
+        q_ = self.state.q[None, None, :]
         cc_ = C_eff.conj()[:, None, :]
 
         R = 1.0 / ((2.0 / dt_) * (1 - z_) / (1 + z_) - lam_)
