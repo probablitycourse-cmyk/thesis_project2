@@ -37,6 +37,12 @@ class CFG:
     USE_SPATIAL     = True             # region-aware channel projection
     USE_MULTIBAND   = True             # per-band Delta ranges
     USE_GATING      = False            # Mamba-style multiplicative gate
+
+    # --- SSM state parameters (Lambda, q) ---
+    # The official S4 trains these; HiPPO only initialises them. Re(Lambda) is
+    # kept negative by a softplus reparameterisation so stability is preserved.
+    TRAIN_SSM_STATE = False
+    LR_STATE_MULT   = 0.01             # lr multiplier for Lambda / q
     H               = 64               # internal channel width
     N               = 64               # SSM state dimension    (s4 only)
     NUM_LAYERS      = 4
@@ -77,6 +83,8 @@ class CFG:
             ])
             parts.append(tag if tag else "plain")
         parts += [cls.TARGET, f"H{cls.H}", f"N{cls.N}", f"L{cls.NUM_LAYERS}", cls.SPLIT_MODE]
+        if getattr(cls, "TRAIN_SSM_STATE", False):
+            parts.append("trainState")
         parts.append("cos" if cls.USE_SCHEDULER else "fixedlr")
         return "_".join(parts)
 
