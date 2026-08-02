@@ -11,6 +11,7 @@ from .eeg_components import (
     band_to_dt_range,
 )
 from .eeg_model import EEGS4Block, EEGS4Model
+from .ssm_state import SSMState, ssm_param_names
 
 __all__ = [
     "hippo_legs_matrices", "nplr_decompose", "verify_nplr",
@@ -18,7 +19,7 @@ __all__ = [
     "LSTMModel", "TransformerModel",
     "MultiBandS4Layer", "SpatialFilter", "EEG_BANDS",
     "EMOTIV_REGIONS", "EMOTIV_CHANNELS", "band_to_dt_range",
-    "EEGS4Block", "EEGS4Model",
+    "EEGS4Block", "EEGS4Model", "SSMState", "ssm_param_names",
     "build_model",
 ]
 
@@ -37,6 +38,7 @@ def build_model(cfg, input_dim: int, out_dim: int):
             theta_mode=cfg.THETA_MODE,
             dropout=cfg.DROPOUT,
             pooling=cfg.POOLING,
+            train_ssm_state=getattr(cfg, "TRAIN_SSM_STATE", False),
         )
 
     if name in ("eeg_s4", "eegs4"):
@@ -53,6 +55,7 @@ def build_model(cfg, input_dim: int, out_dim: int):
             theta_mode=cfg.THETA_MODE,
             dropout=cfg.DROPOUT,
             pooling=cfg.POOLING,
+            train_ssm_state=getattr(cfg, "TRAIN_SSM_STATE", False),
         )
         print(model.describe())
         return model
