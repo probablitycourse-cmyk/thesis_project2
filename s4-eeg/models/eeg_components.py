@@ -25,6 +25,7 @@ import torch
 import torch.nn as nn
 
 from .hippo import nplr_decompose
+from .ssm_state import SSMState
 
 # Canonical EEG bands (Hz) and the Delta range that matches each one.
 # Delta ~ 1 / (f * FS_normalised); lower frequency -> larger effective memory
@@ -145,6 +146,7 @@ class MultiBandS4Layer(nn.Module):
         fs: float = 128.0,
         bands: dict | None = None,
         gated: bool = False,
+        train_ssm_state: bool = False,
     ) -> None:
         super().__init__()
         self.H, self.N = H, N
@@ -152,9 +154,7 @@ class MultiBandS4Layer(nn.Module):
         self.band_names = list(self.bands.keys())
         n_bands = len(self.band_names)
 
-        Lambda, q, _ = nplr_decompose(N)
-        self.register_buffer("Lambda_buf", torch.tensor(Lambda, dtype=torch.complex64))
-        self.register_buffer("q", torch.tensor(q, dtype=torch.complex64))
+        self.state = SSMState(N, trainable=train_ssm_state)
 
         # split H across bands; the remainder is spread over the first bands
         base, rem = divmod(H, n_bands)
@@ -194,8 +194,8 @@ class MultiBandS4Layer(nn.Module):
 
         dt_ = dt[:, None, None]
         z_ = omega[None, :, None]
-        lam_ = self.Lambda_buf[None, None, :]
-        q_ = self.q[None, None, :]
+        lam_ = self.state.Lambda[None, None, :]
+        q_ = self.state.q[None, None, :]
         cc_ = C.conj()[:, None, :]
 
         R = 1.0 / ((2.0 / dt_) * (1 - z_) / (1 + z_) - lam_)
