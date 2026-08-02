@@ -30,8 +30,13 @@ class CFG:
     TEST_SUBJECTS   = [18, 19, 20, 21, 22]   # used when SPLIT_MODE == "subject"
 
     # ---------------- model ----------------
-    MODEL           = "s4"             # s4 | lstm | transformer
+    MODEL           = "s4"             # s4 | eeg_s4 | lstm | transformer
     THETA_MODE      = "none"           # none | const | order   (s4 only)
+
+    # --- eeg_s4 components (each ablatable independently) ---
+    USE_SPATIAL     = True             # region-aware channel projection
+    USE_MULTIBAND   = True             # per-band Delta ranges
+    USE_GATING      = False            # Mamba-style multiplicative gate
     H               = 64               # internal channel width
     N               = 64               # SSM state dimension    (s4 only)
     NUM_LAYERS      = 4
@@ -64,6 +69,13 @@ class CFG:
         parts = [cls.MODEL]
         if cls.MODEL.lower() == "s4":
             parts.append(cls.THETA_MODE)
+        elif cls.MODEL.lower() in ("eeg_s4", "eegs4"):
+            tag = "".join([
+                "S" if cls.USE_SPATIAL else "",
+                "M" if cls.USE_MULTIBAND else "",
+                "G" if cls.USE_GATING else "",
+            ])
+            parts.append(tag if tag else "plain")
         parts += [cls.TARGET, f"H{cls.H}", f"N{cls.N}", f"L{cls.NUM_LAYERS}", cls.SPLIT_MODE]
         parts.append("cos" if cls.USE_SCHEDULER else "fixedlr")
         return "_".join(parts)
