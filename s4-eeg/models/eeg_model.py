@@ -17,6 +17,7 @@ import torch
 import torch.nn as nn
 
 from .s4_layer import S4Layer
+from .s4_model import _split_param_groups
 from .eeg_components import MultiBandS4Layer, SpatialFilter, EEG_BANDS
 
 
@@ -32,13 +33,16 @@ class EEGS4Block(nn.Module):
         use_gating: bool = False,
         theta_mode: str = "none",
         dropout: float = 0.1,
+        train_ssm_state: bool = False,
     ) -> None:
         super().__init__()
 
         if use_multiband:
-            self.ssm = MultiBandS4Layer(H, N, fs=fs, gated=use_gating)
+            self.ssm = MultiBandS4Layer(H, N, fs=fs, gated=use_gating,
+                                        train_ssm_state=train_ssm_state)
         else:
-            self.ssm = S4Layer(H, N, theta_mode=theta_mode)
+            self.ssm = S4Layer(H, N, theta_mode=theta_mode,
+                               train_ssm_state=train_ssm_state)
             self.gate_proj = nn.Linear(H, H) if use_gating else None
 
         self.use_multiband = use_multiband
@@ -81,8 +85,10 @@ class EEGS4Model(nn.Module):
         theta_mode: str = "none",
         dropout: float = 0.1,
         pooling: str = "mean",
+        train_ssm_state: bool = False,
     ) -> None:
         super().__init__()
+        self.train_ssm_state = train_ssm_state
         if pooling not in ("mean", "last", "max"):
             raise ValueError(f"unknown pooling {pooling!r}")
         self.pooling = pooling
@@ -98,7 +104,8 @@ class EEGS4Model(nn.Module):
 
         self.blocks = nn.ModuleList([
             EEGS4Block(H, N, fs=fs, use_multiband=use_multiband,
-                       use_gating=use_gating, theta_mode=theta_mode, dropout=dropout)
+                       use_gating=use_gating, theta_mode=theta_mode, dropout=dropout,
+                       train_ssm_state=train_ssm_state)
             for _ in range(num_layers)
         ])
         self.out_proj = nn.Linear(H, out_dim)
@@ -117,25 +124,9 @@ class EEGS4Model(nn.Module):
 
         return self.out_proj(pooled)
 
-    def param_groups(self, lr: float, ssm_mult: float = 0.1, theta_mult: float = 0.1):
-        theta_p, ssm_p, other_p = [], [], []
-        for name, p in self.named_parameters():
-            if not p.requires_grad:
-                continue
-            if name.endswith(".G"):
-                theta_p.append(p)
-            elif "log_dt" in name:
-                ssm_p.append(p)
-            else:
-                other_p.append(p)
-
-        groups = [
-            {"params": other_p, "lr": lr},
-            {"params": ssm_p, "lr": lr * ssm_mult},
-        ]
-        if theta_p:
-            groups.append({"params": theta_p, "lr": lr * theta_mult})
-        return groups
+    def param_groups(self, lr: float, ssm_mult: float = 0.1, theta_mult: float = 0.1,
+                     state_mult: float = 0.01):
+        return _split_param_groups(self, lr, ssm_mult, theta_mult, state_mult)
 
     def num_params(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
@@ -145,6 +136,7 @@ class EEGS4Model(nn.Module):
         flags.append(f"spatial={'on' if self.use_spatial else 'off'}")
         flags.append(f"multiband={'on' if self.use_multiband else 'off'}")
         flags.append(f"gating={'on' if self.use_gating else 'off'}")
+        flags.append(f"train_state={'on' if self.train_ssm_state else 'off'}")
         lines = ["EEGS4Model [" + ", ".join(flags) + "]"]
         if self.use_multiband:
             lines.append("  band -> Delta ranges (fs=128):")
