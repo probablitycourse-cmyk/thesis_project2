@@ -69,7 +69,15 @@ def train(model, train_loader, test_loader, cfg, device, majority: float = 0.0):
           + (f"/{cfg.THETA_MODE}" if cfg.MODEL.lower() == "s4" else "")
           + f"] trainable params: {model.num_params():,}")
 
-    groups = model.param_groups(cfg.LR, ssm_mult=cfg.LR_SSM_MULT, theta_mult=cfg.LR_THETA_MULT)
+    try:
+        groups = model.param_groups(
+            cfg.LR,
+            ssm_mult=cfg.LR_SSM_MULT,
+            theta_mult=cfg.LR_THETA_MULT,
+            state_mult=getattr(cfg, "LR_STATE_MULT", 0.01),
+        )
+    except TypeError:  # baselines take only lr
+        groups = model.param_groups(cfg.LR)
     optimizer = torch.optim.Adam(groups, weight_decay=cfg.WEIGHT_DECAY)
     use_sched = getattr(cfg, "USE_SCHEDULER", True)
     scheduler = (
@@ -135,11 +143,22 @@ def train(model, train_loader, test_loader, cfg, device, majority: float = 0.0):
         else:
             patience_left -= 1
 
+        margin_str = ""
+        if getattr(cfg, "TRAIN_SSM_STATE", False):
+            margins = [m.stability_margin() for m in model.modules()
+                       if hasattr(m, "stability_margin")]
+            if margins:
+                worst = max(margins)
+                margin_str = f" | Re(L)max={worst:+.3f}"
+                if worst >= 0:
+                    print(f"  WARNING: Re(Lambda) reached {worst:+.4f} -- "
+                          f"SSM is at/over the stability boundary")
+
         if epoch % cfg.PRINT_EVERY == 0 or epoch == cfg.NUM_EPOCHS:
             print(f"ep {epoch:3d}/{cfg.NUM_EPOCHS} | "
                   f"train: loss={train_loss:.4f} acc={train_acc:.4f} | "
                   f"test: loss={test_loss:.4f} acc={test_acc:.4f} | "
-                  f"lr={cur_lr:.2e} | {dt:.1f}s{marker}", flush=True)
+                  f"lr={cur_lr:.2e}{margin_str} | {dt:.1f}s{marker}", flush=True)
 
         if cfg.EARLY_STOP_PATIENCE > 0 and patience_left <= 0:
             print(f"early stopping at epoch {epoch} "
