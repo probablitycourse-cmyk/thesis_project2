@@ -51,7 +51,7 @@ def load_baseline_means(data_dir: str, n_clips: int) -> np.ndarray | None:
 
 
 # ----------------------------------------------------------------------
-def build_arrays(cfg) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def build_arrays(cfg):
     """
     Build the full windowed dataset.
 
@@ -59,7 +59,10 @@ def build_arrays(cfg) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     -------
     X        (n_windows, window_len, n_channels) float32
     y        (n_windows,) int64
-    subject  (n_windows,) int64   subject id of each window (for subject splits)
+    subject  (n_windows,) int64   subject id of each window
+    clip     (n_windows,) int64   clip id of each window
+    pos      (n_windows,) int64   position of the window inside its clip,
+                                  needed for the contiguous temporal split
     """
     t0 = time.time()
     target_idx = TARGET_INDEX[cfg.TARGET]
@@ -74,7 +77,7 @@ def build_arrays(cfg) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     window = int(round(cfg.WINDOW_SEC * cfg.FS))
     stride = int(round(cfg.STRIDE_SEC * cfg.FS))
 
-    X_parts, y_parts, subj_parts = [], [], []
+    X_parts, y_parts, subj_parts, clip_parts, pos_parts = [], [], [], [], []
 
     for clip in range(n_clips):
         path = os.path.join(cfg.DATA_DIR, f"stimuli_{clip}_clip.pkl")
@@ -101,6 +104,8 @@ def build_arrays(cfg) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             X_parts.append(stacked[subj].astype(np.float32))
             y_parts.append(np.full(n_win, y_clip[subj, clip], dtype=np.float32))
             subj_parts.append(np.full(n_win, subj, dtype=np.int64))
+            clip_parts.append(np.full(n_win, clip, dtype=np.int64))
+            pos_parts.append(np.arange(n_win, dtype=np.int64))
 
         if cfg.VERBOSE:
             print(f"  clip {clip:2d}: T={T:6d} -> {n_win:4d} windows x {n_subjects} subjects")
@@ -108,6 +113,8 @@ def build_arrays(cfg) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     X = np.concatenate(X_parts, axis=0)
     y_raw = np.concatenate(y_parts, axis=0)
     subject = np.concatenate(subj_parts, axis=0)
+    clip_id = np.concatenate(clip_parts, axis=0)
+    position = np.concatenate(pos_parts, axis=0)
 
     print(f"  X={X.shape}  y={y_raw.shape}  ({time.time() - t0:.1f}s, {X.nbytes / 1e9:.2f} GB)")
 
@@ -137,15 +144,88 @@ def build_arrays(cfg) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
             X[m] = (X[m] - mu) / sd
         print("  z-score applied (per channel, per subject)")
 
-    return X, y, subject
+    return X, y, subject, clip_id, position
 
 
 # ----------------------------------------------------------------------
-def split_indices(y: np.ndarray, subject: np.ndarray, cfg):
-    """Return (train_idx, test_idx) according to cfg.SPLIT_MODE."""
+def contiguous_block_split(subject, clip_id, position, test_ratio, rng, subjects=None):
+    """
+    Temporal block split that minimises correlation between train and test.
+
+    For every (subject, clip) pair the windows form a contiguous timeline.
+    A single block of length round(test_ratio * n_windows) is cut out at a
+    uniformly random offset and assigned to the test set; everything before
+    and after it becomes training data. Because only the two block edges are
+    adjacent to training windows, neighbouring-window leakage is limited to
+    those two boundaries instead of thousands of overlapping pairs.
+
+    The offset is drawn independently for every (subject, clip) pair, so clips
+    of different lengths and different subjects get different cut points.
+
+    Parameters
+    ----------
+    subjects : iterable or None
+        Restrict the split to these subject ids (used by the per-subject
+        protocol). None means use every subject present.
+
+    Returns
+    -------
+    train_idx, test_idx : np.ndarray of int
+    """
+    all_idx = np.arange(len(subject))
+    subj_list = np.unique(subject) if subjects is None else np.asarray(subjects)
+
+    train_parts, test_parts = [], []
+
+    for subj in subj_list:
+        for clip in np.unique(clip_id[subject == subj]):
+            mask = (subject == subj) & (clip_id == clip)
+            idx = all_idx[mask]
+            if idx.size == 0:
+                continue
+
+            # order by position inside the clip so the block is contiguous in time
+            order = np.argsort(position[mask])
+            idx = idx[order]
+
+            n = idx.size
+            n_test = int(round(n * test_ratio))
+            n_test = max(1, min(n_test, n - 1)) if n > 1 else 0
+
+            if n_test == 0:
+                train_parts.append(idx)
+                continue
+
+            start = int(rng.randint(0, n - n_test + 1))
+            test_parts.append(idx[start:start + n_test])
+            train_parts.append(np.concatenate([idx[:start], idx[start + n_test:]]))
+
+    train_idx = np.concatenate(train_parts) if train_parts else np.array([], dtype=int)
+    test_idx = np.concatenate(test_parts) if test_parts else np.array([], dtype=int)
+    return train_idx, test_idx
+
+
+# ----------------------------------------------------------------------
+def split_indices(y, subject, cfg, clip_id=None, position=None):
+    """
+    Return (train_idx, test_idx) according to cfg.SPLIT_MODE and
+    cfg.SPLIT_SCHEME.
+
+    SPLIT_SCHEME
+        "random"     windows are shuffled and cut 80/20 (high correlation:
+                     neighbouring windows land on opposite sides)
+        "contiguous" one random contiguous time block per (subject, clip)
+                     becomes the test set (low correlation)
+    """
     rng = np.random.RandomState(cfg.SEED)
+    scheme = getattr(cfg, "SPLIT_SCHEME", "random")
 
     if cfg.SPLIT_MODE == "random":
+        if scheme == "contiguous":
+            if clip_id is None or position is None:
+                raise ValueError("contiguous scheme needs clip_id and position")
+            return contiguous_block_split(subject, clip_id, position,
+                                          cfg.TEST_RATIO, rng)
         idx = rng.permutation(len(y))
         n_test = int(len(y) * cfg.TEST_RATIO)
         return idx[n_test:], idx[:n_test]
@@ -163,14 +243,24 @@ def split_indices(y: np.ndarray, subject: np.ndarray, cfg):
               f"test subjects={sorted(test_subjects)}")
         return train_idx, test_idx
 
+    if cfg.SPLIT_MODE == "subject_contiguous":
+        # every subject contributes both train and test data, but the test
+        # part is a contiguous time block cut from each of that subject's clips
+        if clip_id is None or position is None:
+            raise ValueError("subject_contiguous needs clip_id and position")
+        return contiguous_block_split(subject, clip_id, position,
+                                      cfg.TEST_RATIO, rng)
+
     raise ValueError(f"unknown SPLIT_MODE {cfg.SPLIT_MODE!r} (expected random | subject)")
 
 
 def make_loaders(cfg) -> tuple[DataLoader, DataLoader, dict]:
     """Build the dataset and return (train_loader, test_loader, info)."""
     print("--- building dataset ---")
-    X, y, subject = build_arrays(cfg)
-    train_idx, test_idx = split_indices(y, subject, cfg)
+    X, y, subject, clip_id, position = build_arrays(cfg)
+    train_idx, test_idx = split_indices(y, subject, cfg, clip_id, position)
+    scheme = getattr(cfg, "SPLIT_SCHEME", "random")
+    print(f"  split: mode={cfg.SPLIT_MODE}, scheme={scheme}")
 
     Xtr = torch.from_numpy(X[train_idx])
     ytr = torch.from_numpy(y[train_idx])
@@ -226,19 +316,25 @@ def make_loaders_per_subject(cfg):
     (subject_id, train_loader, test_loader, info)
     """
     print("--- building dataset (subject-dependent protocol) ---")
-    X, y, subject = build_arrays(cfg)
+    X, y, subject, clip_id, position = build_arrays(cfg)
     subjects = np.unique(subject)
+    scheme = getattr(cfg, "SPLIT_SCHEME", "random")
     rng = np.random.RandomState(cfg.SEED)
 
     print(f"  {len(subjects)} subjects, splitting each {1 - cfg.TEST_RATIO:.0%}/"
-          f"{cfg.TEST_RATIO:.0%} independently")
+          f"{cfg.TEST_RATIO:.0%} independently  (scheme={scheme})")
 
     for subj in subjects:
-        mask = np.where(subject == subj)[0]
-        perm = rng.permutation(len(mask))
-        n_test = int(len(mask) * cfg.TEST_RATIO)
-        te_local, tr_local = perm[:n_test], perm[n_test:]
-        te_idx, tr_idx = mask[te_local], mask[tr_local]
+        if scheme == "contiguous":
+            tr_idx, te_idx = contiguous_block_split(
+                subject, clip_id, position, cfg.TEST_RATIO, rng, subjects=[subj]
+            )
+        else:
+            mask = np.where(subject == subj)[0]
+            perm = rng.permutation(len(mask))
+            n_test = int(len(mask) * cfg.TEST_RATIO)
+            te_local, tr_local = perm[:n_test], perm[n_test:]
+            te_idx, tr_idx = mask[te_local], mask[tr_local]
 
         Xtr = torch.from_numpy(X[tr_idx]); ytr = torch.from_numpy(y[tr_idx])
         Xte = torch.from_numpy(X[te_idx]); yte = torch.from_numpy(y[te_idx])
