@@ -1,7 +1,7 @@
 from .hippo import hippo_legs_matrices, nplr_decompose, verify_nplr
 from .s4_layer import S4Layer, THETA_MODES
 from .s4_model import S4Block, S4Model
-from .baselines import LSTMModel, TransformerModel
+from .baselines import LSTMModel, TransformerModel, MLPModel
 from .eeg_components import (
     MultiBandS4Layer,
     SpatialFilter,
@@ -16,7 +16,7 @@ from .ssm_state import SSMState, ssm_param_names
 __all__ = [
     "hippo_legs_matrices", "nplr_decompose", "verify_nplr",
     "S4Layer", "THETA_MODES", "S4Block", "S4Model",
-    "LSTMModel", "TransformerModel",
+    "LSTMModel", "TransformerModel", "MLPModel",
     "MultiBandS4Layer", "SpatialFilter", "EEG_BANDS",
     "EMOTIV_REGIONS", "EMOTIV_CHANNELS", "band_to_dt_range",
     "EEGS4Block", "EEGS4Model", "SSMState", "ssm_param_names",
@@ -24,7 +24,7 @@ __all__ = [
 ]
 
 
-def build_model(cfg, input_dim: int, out_dim: int):
+def build_model(cfg, input_dim: int, out_dim: int, seq_len: int | None = None):
     """Factory that maps cfg.MODEL to a concrete model instance."""
     name = cfg.MODEL.lower()
 
@@ -60,6 +60,18 @@ def build_model(cfg, input_dim: int, out_dim: int):
         print(model.describe())
         return model
 
+    if name == "mlp":
+        if seq_len is None:
+            raise ValueError("MLP baseline needs seq_len (window length)")
+        return MLPModel(
+            input_dim=input_dim,
+            seq_len=seq_len,
+            H=cfg.H,
+            num_layers=cfg.NUM_LAYERS,
+            out_dim=out_dim,
+            dropout=cfg.DROPOUT,
+        )
+
     if name == "lstm":
         return LSTMModel(
             input_dim=input_dim,
@@ -79,4 +91,4 @@ def build_model(cfg, input_dim: int, out_dim: int):
             dropout=cfg.DROPOUT,
         )
 
-    raise ValueError(f"unknown MODEL {cfg.MODEL!r} (expected s4 | eeg_s4 | lstm | transformer)")
+    raise ValueError(f"unknown MODEL {cfg.MODEL!r} (expected s4 | eeg_s4 | mlp | lstm | transformer)")
