@@ -25,12 +25,20 @@ class CFG:
     NORMALIZE       = "zscore"         # zscore | zscore_subject | none
 
     # ---------------- split ----------------
-    SPLIT_MODE      = "random"         # random | subject
+    SPLIT_MODE      = "random"         # random | subject | subject_contiguous
+    # how windows are assigned to train/test:
+    #   "random"     shuffle all windows, cut TEST_RATIO off the top.
+    #                Neighbouring windows end up on opposite sides, so the
+    #                test set is highly correlated with the training set.
+    #   "contiguous" per (subject, clip), cut one contiguous time block of
+    #                length TEST_RATIO at a random offset for testing. Only
+    #                the two block edges touch training data.
+    SPLIT_SCHEME    = "random"         # random | contiguous
     TEST_RATIO      = 0.2              # used when SPLIT_MODE == "random"
     TEST_SUBJECTS   = [18, 19, 20, 21, 22]   # used when SPLIT_MODE == "subject"
 
     # ---------------- model ----------------
-    MODEL           = "s4"             # s4 | eeg_s4 | lstm | transformer
+    MODEL           = "s4"             # s4 | eeg_s4 | mlp | lstm | transformer
     THETA_MODE      = "none"           # none | const | order   (s4 only)
 
     # --- eeg_s4 components (each ablatable independently) ---
@@ -83,6 +91,8 @@ class CFG:
             ])
             parts.append(tag if tag else "plain")
         parts += [cls.TARGET, f"H{cls.H}", f"N{cls.N}", f"L{cls.NUM_LAYERS}", cls.SPLIT_MODE]
+        if getattr(cls, "SPLIT_SCHEME", "random") != "random":
+            parts.append(cls.SPLIT_SCHEME)
         if getattr(cls, "TRAIN_SSM_STATE", False):
             parts.append("trainState")
         parts.append("cos" if cls.USE_SCHEDULER else "fixedlr")
