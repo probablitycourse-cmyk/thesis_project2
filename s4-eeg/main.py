@@ -45,7 +45,8 @@ def run(cfg=CFG, show_plot: bool = True):
 
     train_loader, test_loader, info = make_loaders(cfg)
 
-    model = build_model(cfg, input_dim=info["n_channels"], out_dim=info["n_classes"])
+    model = build_model(cfg, input_dim=info["n_channels"], out_dim=info["n_classes"],
+                        seq_len=info["window_len"])
     hist, best = train(model, train_loader, test_loader, cfg, device,
                        majority=info["majority_baseline"])
 
@@ -92,7 +93,8 @@ def run_per_subject(cfg=CFG, show_plot: bool = True):
               f"majority={info['majority_baseline']:.4f})\n{'=' * 58}")
 
         set_seed(cfg.SEED)
-        model = build_model(cfg, input_dim=info["n_channels"], out_dim=info["n_classes"])
+        model = build_model(cfg, input_dim=info["n_channels"], out_dim=info["n_classes"],
+                            seq_len=info["window_len"])
         hist, best = train(model, train_loader, test_loader, cfg, device,
                            majority=info["majority_baseline"])
 
