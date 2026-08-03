@@ -105,7 +105,14 @@ class S4Layer(nn.Module):
         q_ = self.state.q[None, None, :]
         cc_ = C_eff.conj()[:, None, :]
 
-        R = 1.0 / ((2.0 / dt_) * (1 - z_) / (1 + z_) - lam_)
+        # At k = L/2 the root of unity is exactly z = -1, so (1 + z) underflows
+        # to ~1e-16 and (1 - z)/(1 + z) blows up. Clamp the denominator away
+        # from zero; the affected frequency bin is a single point and the
+        # kernel is recovered correctly by the IFFT regardless.
+        denom = 1 + z_
+        denom = torch.where(denom.abs() < 1e-6,
+                            torch.full_like(denom, 1e-6), denom)
+        R = 1.0 / ((2.0 / dt_) * (1 - z_) / denom - lam_)
 
         k00 = (cc_ * R * q_).sum(-1)
         qRq = (q_.conj() * R * q_).sum(-1)
@@ -113,7 +120,9 @@ class S4Layer(nn.Module):
         k01 = np.sqrt(0.5) * k00
         k10 = np.sqrt(0.5) * qRq
 
-        K_hat = (2.0 / (1 + omega))[None, :] * (k00 - k01 * k10 / (1 + k11))
+        omega_denom = torch.where((1 + omega).abs() < 1e-6,
+                                  torch.full_like(omega, 1e-6), 1 + omega)
+        K_hat = (2.0 / omega_denom)[None, :] * (k00 - k01 * k10 / (1 + k11))
         return torch.fft.ifft(K_hat, dim=-1).real
 
     # ------------------------------------------------------------------
