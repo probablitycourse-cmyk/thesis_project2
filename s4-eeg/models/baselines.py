@@ -85,3 +85,48 @@ class TransformerModel(nn.Module):
 
     def num_params(self) -> int:
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
+
+
+class MLPModel(nn.Module):
+    """
+    Flatten-then-MLP baseline.
+
+    The whole window is flattened into a single vector (L * n_channels) and
+    fed to a plain feed-forward network. This model has no notion of time
+    order at all, so it cannot exploit temporal structure -- which makes it a
+    useful leakage probe. If a shuffled-window split lets an MLP reach an
+    accuracy far above chance, the split itself is putting near-duplicate
+    windows on both sides rather than the model learning anything temporal.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        seq_len: int,
+        H: int = 256,
+        num_layers: int = 2,
+        out_dim: int = 2,
+        dropout: float = 0.3,
+    ) -> None:
+        super().__init__()
+        self.seq_len = seq_len
+        self.input_dim = input_dim
+        flat_dim = seq_len * input_dim
+
+        layers: list[nn.Module] = []
+        prev = flat_dim
+        for _ in range(num_layers):
+            layers += [nn.Linear(prev, H), nn.GELU(), nn.Dropout(dropout)]
+            prev = H
+        layers.append(nn.Linear(prev, out_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """x: (batch, L, input_dim) -> logits (batch, out_dim)."""
+        return self.net(x.reshape(x.size(0), -1))
+
+    def param_groups(self, lr: float, **_):
+        return [{"params": [p for p in self.parameters() if p.requires_grad], "lr": lr}]
+
+    def num_params(self) -> int:
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
