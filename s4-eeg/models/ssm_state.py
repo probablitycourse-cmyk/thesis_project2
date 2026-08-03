@@ -55,18 +55,24 @@ class SSMState(nn.Module):
             self.register_buffer("q_buf", q_t)
             return
 
-        # Re(Lambda) = -softplus(w)  ->  w = inverse_softplus(-Re(Lambda))
-        neg_real = (-Lambda_t.real).clamp(min=1e-4)
+        # Re(Lambda) = -(softplus(w) + MIN_DECAY)
+        #   ->  w = inverse_softplus(-Re(Lambda) - MIN_DECAY)
+        neg_real = (-Lambda_t.real - self.MIN_DECAY).clamp(min=1e-4)
         self.lambda_re_raw = nn.Parameter(_inverse_softplus(neg_real))
         self.lambda_im = nn.Parameter(Lambda_t.imag.clone())
         self.q_param = nn.Parameter(torch.view_as_real(q_t))
 
     # ------------------------------------------------------------------
+    # Re(Lambda) is never allowed closer to zero than this. Without a floor,
+    # softplus underflows for very negative inputs and Re(Lambda) -> 0, which
+    # makes the resolvent 1/(... - Lambda) singular and produces NaNs.
+    MIN_DECAY = 1e-3
+
     @property
     def Lambda(self) -> torch.Tensor:
         if not self.trainable:
             return self.Lambda_buf
-        re = -torch.nn.functional.softplus(self.lambda_re_raw)
+        re = -(torch.nn.functional.softplus(self.lambda_re_raw) + self.MIN_DECAY)
         return torch.complex(re, self.lambda_im)
 
     @property
