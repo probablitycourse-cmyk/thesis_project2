@@ -106,6 +106,12 @@ def train(model, train_loader, test_loader, cfg, device, majority: float = 0.0):
             logits = model(xb)
             loss = criterion(logits, yb)
 
+            if not torch.isfinite(loss):
+                raise RuntimeError(
+                    f"loss became {loss.item()} at epoch {epoch}. "
+                    "The SSM kernel has diverged -- check Re(Lambda) and dt."
+                )
+
             optimizer.zero_grad()
             loss.backward()
             if cfg.GRAD_CLIP > 0:
